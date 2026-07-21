@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>To-Do List Collaborative Realtime</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Supabase JS Client CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body class="bg-slate-100 min-h-screen flex items-center justify-center p-4">
+
+  <div class="bg-white rounded-xl shadow-md w-full max-w-md p-6">
+    <!-- Header -->
+    <div class="flex items-center justify-between mb-6">
+      <h1 class="text-2xl font-bold text-slate-800">To-Do Collaborative</h1>
+      <span class="flex h-3 w-3 relative">
+        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+        <span class="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+      </span>
+    </div>
+
+    <!-- Form per aggiungere nuovi To-Do -->
+    <form id="todo-form" class="flex gap-2 mb-6">
+      <input 
+        type="text" 
+        id="todo-input" 
+        placeholder="Aggiungi una nuova attivita..." 
+        required
+        class="flex-1 px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+      >
+      <button 
+        type="submit" 
+        class="bg-indigo-600 hover:bg-indigo-700 text-white font-medium px-4 py-2 rounded-lg transition"
+      >
+        Aggiungi
+      </button>
+    </form>
+
+    <!-- Lista dei To-Do -->
+    <ul id="todo-list" class="space-y-2">
+      <li class="text-slate-400 text-center py-4">Caricamento in corso...</li>
+    </ul>
+  </div>
+
+  <script>
+    // -------------------------------------------------------------
+    // CONFIGURAZIONE SUPABASE
+    // -------------------------------------------------------------
+    const SUPABASE_URL = "https://vgttrravgpflvneabryh.supabase.co";
+    const SUPABASE_ANON_KEY = "sb_publishable_vmlb1NRIokj7X2sTyy-tow_F3B0llsR";
+
+    // Istanza del client rinominata per evitare sovrapposizioni
+    const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    const todoForm = document.getElementById("todo-form");
+    const todoInput = document.getElementById("todo-input");
+    const todoList = document.getElementById("todo-list");
+
+    let todosMap = new Map();
+
+    function renderTodos() {
+      todoList.innerHTML = "";
+
+      if (todosMap.size === 0) {
+        todoList.innerHTML = '<li class="text-slate-400 text-center py-4">Nessuna attivita presente.</li>';
+        return;
+      }
+
+      const sortedTodos = Array.from(todosMap.values()).sort(function(a, b) {
+        return a.id - b.id;
+      });
+
+      sortedTodos.forEach(function(todo) {
+        const li = document.createElement("li");
+        const isCompletedClass = todo.is_completed ? "opacity-60" : "";
+        const textStyleClass = todo.is_completed ? "line-through text-slate-400" : "text-slate-700 font-medium";
+        const isChecked = todo.is_completed ? "checked" : "";
+
+        li.className = "flex items-center justify-between p-3 rounded-lg border border-slate-100 bg-slate-50 transition " + isCompletedClass;
+
+        li.innerHTML = 
+          '<div class="flex items-center gap-3">' +
+            '<input type="checkbox" ' + isChecked + ' onchange="toggleTodo(' + todo.id + ', ' + !todo.is_completed + ')" class="w-5 h-5 text-indigo-600 rounded focus:ring-indigo-500 cursor-pointer">' +
+            '<span class="' + textStyleClass + '">' + escapeHtml(todo.text) + '</span>' +
+          '</div>' +
+          '<button onclick="deleteTodo(' + todo.id + ')" class="text-slate-400 hover:text-red-500 transition px-2 py-1 text-sm">&#10005;</button>';
+
+        todoList.appendChild(li);
+      });
+    }
+
+    function escapeHtml(str) {
+      if (!str) return "";
+      return String(str).replace(/[&<>'"]/g, function(tag) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[tag] || tag;
+      });
+    }
+
+    async function fetchInitialTodos() {
+      const res = await supabaseClient.from("todos").select("*").order("id", { ascending: true });
+
+      if (res.error) {
+        console.error("Errore:", res.error);
+        todoList.innerHTML = '<li class="text-red-500 text-center py-4">Errore nel caricamento. Controlla le regole RLS su Supabase.</li>';
+        return;
+      }
+
+      todosMap.clear();
+      if (res.data) {
+        res.data.forEach(function(item) {
+          todosMap.set(item.id, item);
+        });
+      }
+      renderTodos();
+    }
+
+    todoForm.addEventListener("submit", async function(e) {
+      e.preventDefault();
+      const text = todoInput.value.trim();
+      if (!text) return;
+
+      todoInput.value = "";
+
+      const res = await supabaseClient.from("todos").insert([{ text: text, is_completed: false }]);
+      if (res.error) console.error("Errore salvataggio:", res.error);
+    });
+
+    async function toggleTodo(id, newStatus) {
+      const res = await supabaseClient.from("todos").update({ is_completed: newStatus }).eq("id", id);
+      if (res.error) console.error("Errore modifica:", res.error);
+    }
+
+    async function deleteTodo(id) {
+      const res = await supabaseClient.from("todos").delete().eq("id", id);
+      if (res.error) console.error("Errore eliminazione:", res.error);
+    }
+
+    function setupRealtimeSubscription() {
+      supabaseClient
+        .channel("todos-realtime")
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "todos" },
+          function(payload) {
+            if (payload.eventType === "INSERT") {
+              todosMap.set(payload.new.id, payload.new);
+            } else if (payload.eventType === "UPDATE") {
+              todosMap.set(payload.new.id, payload.new);
+            } else if (payload.eventType === "DELETE") {
+              todosMap.delete(payload.old.id);
+            }
+            renderTodos();
+          }
+        )
+        .subscribe();
+    }
+
+    fetchInitialTodos();
+    setupRealtimeSubscription();
+  </script>
+</body>
+</html>
