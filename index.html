@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>To-Do List Collaborative Realtime</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Supabase JS Client CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body class="bg-slate-100 min-h-screen flex items-center justify-center p-4">
+
+  <div class="bg-white rounded-xl shadow-md w-full max-w-md p-6">
+    <!-- Header -->
+    <div class="flex items-center justify-between mb-6">
+      <h1 class="text-2xl font-bold text-slate-800">To-Do Collaborative</h1>
+      <span class="flex h-3 w-3 relative">
+        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+        <span class="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+      </span>
+    </div>
+
+    <!-- Form per aggiungere nuovi To-Do -->
+    <form id="todo-form" class="flex gap-2 mb-6">
+      <input 
+        type="text" 
+        id="todo-input" 
+        placeholder="Aggiungi una nuova attività..." 
+        required
+        class="flex-1 px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+      >
+      <button 
+        type="submit" 
+        class="bg-indigo-600 hover:bg-indigo-700 text-white font-medium px-4 py-2 rounded-lg transition"
+      >
+        Aggiungi
+      </button>
+    </form>
+
+    <!-- Lista dei To-Do -->
+    <ul id="todo-list" class="space-y-2">
+      <li class="text-slate-400 text-center py-4">Caricamento in corso...</li>
+    </ul>
+  </div>
+
+  <script>
+    // -------------------------------------------------------------
+    // 1. CONFIGURAZIONE SUPABASE
+    // Sostituisci i valori qui sotto con i tuoi dati reali presi da Supabase
+    // -------------------------------------------------------------
+    const SUPABASE_URL = https://vgttrravgpflvneabryh.supabase.co/rest/v1/
+;
+    const SUPABASE_ANON_KEY = sb_publishable_vmlb1NRIokj7X2sTyy-tow_F3B0llsR;
+
+    const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    // Elementi DOM
+    const todoForm = document.getElementById('todo-form');
+    const todoInput = document.getElementById('todo-input');
+    const todoList = document.getElementById('todo-list');
+
+    // Mappa in memoria locale per aggiornare la lista rapidamente
+    let todosMap = new Map();
+
+    // -------------------------------------------------------------
+    // 2. FUNZIONI DI RENDERING
+    // -------------------------------------------------------------
+    function renderTodos() {
+      todoList.innerHTML = '';
+
+      if (todosMap.size === 0) {
+        todoList.innerHTML = '<li class="text-slate-400 text-center py-4">Nessuna attività presente.</li>';
+        return;
+      }
+
+      // Ordiniamo per ID decrescente o ascendente
+      const sortedTodos = Array.from(todosMap.values()).sort((a, b) => a.id - b.id);
+
+      sortedTodos.forEach(todo => {
+        const li = document.createElement('li');
+        li.className = `flex items-center justify-between p-3 rounded-lg border border-slate-100 bg-slate-50 transition ${todo.is_completed ? 'opacity-60' : ''}`;
+
+        li.innerHTML = `
+          <div class="flex items-center gap-3">
+            <input 
+              type="checkbox" 
+              ${todo.is_completed ? 'checked' : ''} 
+              onchange="toggleTodo(${todo.id}, ${!todo.is_completed})"
+              class="w-5 h-5 text-indigo-600 rounded focus:ring-indigo-500 cursor-pointer"
+            >
+            <span class="${todo.is_completed ? 'line-through text-slate-400' : 'text-slate-700 font-medium'}">
+              ${escapeHtml(todo.text)}
+            </span>
+          </div>
+          <button 
+            onclick="deleteTodo(${todo.id})"
+            class="text-slate-400 hover:text-red-500 transition px-2 py-1 text-sm"
+          >
+            ✕
+          </button>
+        `;
+
+        todoList.appendChild(li);
+      });
+    }
+
+    // Utility per evitare XSS injection
+    function escapeHtml(str) {
+      return str.replace(/[&<>'"]/g, 
+        tag => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[tag] || tag)
+      );
+    }
+
+    // -------------------------------------------------------------
+    // 3. OPERAZIONI CRUD (Aggiungi, Spunta, Elimina)
+    // -------------------------------------------------------------
+
+    // Caricamento Iniziale
+    async function fetchInitialTodos() {
+      const { data, error } = await supabase
+        .from('todos')
+        .select('*')
+        .order('id', { ascending: true });
+
+      if (error) {
+        console.error('Errore nel recupero dei dati:', error);
+        todoList.innerHTML = '<li class="text-red-500 text-center py-4">Errore nel caricamento.</li>';
+        return;
+      }
+
+      todosMap.clear();
+      data.forEach(todo => todosMap.set(todo.id, todo));
+      renderTodos();
+    }
+
+    // Aggiungi To-Do
+    todoForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const text = todoInput.value.trim();
+      if (!text) return;
+
+      todoInput.value = '';
+
+      const { error } = await supabase
+        .from('todos')
+        .insert([{ text: text, is_completed: false }]);
+
+      if (error) {
+        console.error('Errore durante il salvataggio:', error);
+      }
+    });
+
+    // Cambia stato (Completed/Active)
+    async function toggleTodo(id, newStatus) {
+      const { error } = await supabase
+        .from('todos')
+        .update({ is_completed: newStatus })
+        .eq('id', id);
+
+      if (error) console.error('Errore durante l'aggiornamento:', error);
+    }
+
+    // Elimina To-Do
+    async function deleteTodo(id) {
+      const { error } = await supabase
+        .from('todos')
+        .delete()
+        .eq('id', id);
+
+      if (error) console.error('Errore durante l'eliminazione:', error);
+    }
+
+    // -------------------------------------------------------------
+    // 4. CANALE REALTIME (Sincronizzazione immediata)
+    // -------------------------------------------------------------
+    function setupRealtimeSubscription() {
+      supabase
+        .channel('todos-realtime')
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'todos' },
+          (payload) => {
+            console.log('Cambiamento ricevuto in tempo reale:', payload);
+
+            if (payload.eventType === 'INSERT') {
+              todosMap.set(payload.new.id, payload.new);
+            } else if (payload.eventType === 'UPDATE') {
+              todosMap.set(payload.new.id, payload.new);
+            } else if (payload.eventType === 'DELETE') {
+              todosMap.delete(payload.old.id);
+            }
+
+            // Re-renderizza l'interfaccia con i dati aggiornati
+            renderTodos();
+          }
+        )
+        .subscribe((status) => {
+          console.log('Stato connessione Realtime:', status);
+        });
+    }
+
+    // Inizializzazione al caricamento della pagina
+    fetchInitialTodos();
+    setupRealtimeSubscription();
+  </script>
+</body>
+</html>
